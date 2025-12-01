@@ -1,0 +1,24 @@
+{
+    "version": 1,
+    "disable_existing_loggers": false,
+
+    "formatters": {
+        "detailed": {"format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"}
+    },
+
+    "handlers": {
+        "thor_console": {
+            "class": "logging.StreamHandler",
+            "formatter": "detailed",
+            "stream": "ext://sys.stdout"
+        }
+    },
+
+    "loggers": {
+        "Thor.models": {
+            "level": "WARNING",
+            "handlers": ["thor_console"],
+            "propagate": false
+        }
+    }
+}
