@@ -1,25 +1,24 @@
 # Thor
 Titers from High-Output Reads is a python library for calculating replicative fitness and titers
-from sequencing reads. The main model can be imported from the models.py module via
+from sequencing reads. The main model can be imported from the [models.py](https://github.com/iAvicenna/Thor/blob/master/Thor/models.py) module via
 
   from Thor import BB_model
 
-The main input to this model is a table who should contain the columns: SERUM, REPEAT, DILUTION, CT
+The main input to this model is a [table](https://github.com/iAvicenna/Thor/blob/master/tests/test_inputs/ngs_table.csv) who should contain the columns: SERUM, REPEAT, DILUTION, CT
 and any variants for which counts are reported. SERUM, REPEAT, DILUTION give the relevant information
 for the sample for each row where as CT should be the value of the CT measurement (or analogous such as
 -log(PFU)) of the supernatat after the assay. SERUM should contain INPUT and NO SERUM for which dilution
 values should be empty strings. Different samples can have different REPEAT names. For instance
 if INPUT has a single repeat, its REPEAT value can be an empty string where as if NO SERUM has three repeats
 its repeat values can be A,B. Other relevant input to the model are explained in the doc string. More details
-about how the model was formulated and how it works is given in the paper [PAPER NAME](link). For an example
-table see tests/tests_input folder.
+about how the model was formulated and how it works is given in the paper [PAPER NAME](link). 
 
-Functions inside samplers.py module can be used to carry out posterior predictive sampling for various
+Functions inside [samplers.py](https://github.com/iAvicenna/Thor/blob/master/Thor/nonparametric.py) module can be used to carry out posterior predictive sampling for various
 observables of interest such as pairwise differences between titers or neutralization curves.
 
-Functions inside simulator.py module can be used to simulate datasets for testing.
+Functions inside [simulator.py](https://github.com/iAvicenna/Thor/blob/master/Thor/simulator.py) module can be used to simulate datasets for testing.
 
-Functions inside nonparametric.py are used to obtain non-parametric estimates for replicative fitness
+Functions inside [nonparametric.py](https://github.com/iAvicenna/Thor/blob/master/Thor/nonparametric.py) are used to obtain non-parametric estimates for replicative fitness
 and titers (see the paper above for details) which are then used to vaguely inform priors by using
 population averages and standard deviations of these parameters.
 
