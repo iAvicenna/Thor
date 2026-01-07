@@ -15,7 +15,7 @@ import pymc as pm
 import numpy as np
 import pytensor.tensor as pt
 
-from .models import _get_counts, _extend_neut, default_prior_params
+from .models import _get_counts, _extend_neut, _input_prior, default_prior_params
 from .utils import UnacceptableInput
 
 
@@ -90,17 +90,18 @@ def BB_sample_neut(model:pm.model.core.Model,
   prior_params = meta["model_args"]["prior_params"]
   x = idata["constant_data"]["x"].data
   serum_idx = idata["constant_data"]["serum_idx"].data
+  repeat_idx = idata["constant_data"]["repeat_idx"].data
 
   if prior_params is None:
     prior_params = {}
 
   prior_params = dict(default_prior_params, **prior_params)
 
-  if N["INPUT"]>1:
-    input_props = pm.Dirichlet("input_props", a=10*np.ones((nstrains)),
-                               dims="strain")
+  if not hasattr(model, "input_props"):
+    input_props = _input_prior(nstrains, obs, meta["model_args"]["fixed_input"],
+                               repeat_idx, meta["model_args"]["ppfu_ratios"])
   else:
-    input_props = obs["input_props"]
+    input_props = model.input_props
 
   log2_rfs = model.log2_rfs
   titers = model.log2_titers
