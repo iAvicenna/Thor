@@ -192,7 +192,6 @@ def BB_ct_eiv_model(
     model_meta = (
         {}
     )
-    breakpoint()
     # model meta is basically used for storing anything picklable
     # that is model related which may be useful for post-processing
     # but is not stored in an Inference Object obtained at the
