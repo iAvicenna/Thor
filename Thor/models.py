@@ -91,7 +91,6 @@ def BB_model(
     prior_params: dict = None,
     subset_variants: List[str] = None,
     concentration_type: str = "linear",
-    use_xlatent: bool = False,
     sd_scale: float = 1,
     xshift: float = 0,
     fixed_input: bool = False,
@@ -126,7 +125,8 @@ def BB_model(
                         to a dataset with single repeat per sample however first
                         read the paper to understand what you are doing.
 
-    subset_variants: use the subset of variants given in this input. 
+    subset_variants: use the subset of variants given in this input. adjusts ct
+                     accordingly.
 
     sd_scale: increase or decrease the sd of any prior which has sd in its
               parametrization using this input. can be used for prior sensitivity
@@ -191,21 +191,7 @@ def BB_model(
         "constant_ct_sd": constant_ct_sd
     }
 
-    if prior_params is None:
-        prior_params = {}
-    else:
-        if not all(x in default_prior_params for x in prior_params):
-            up = [x for x in prior_params if x not in default_prior_params]
-            warnings.warn(
-                "prior_params contain some unknown parameters not"
-                f"found in default_prior_params: {up}. Discarding them."
-            )
-
-            prior_params = {
-                key: prior_params.get(key, val) for key,val in default_prior_params.items()
-            }
-
-    prior_params = dict(default_prior_params, **prior_params)
+    prior_params = _update_prior_params(prior_params)
 
     table = _preprocess_table(table)
 
@@ -213,6 +199,7 @@ def BB_model(
         strains = [x for x in table.columns if x != "CT"]
     else:
         strains = subset_variants
+        table = _adjust_ct_for_subset(table, strains)
 
     if ppfu_ratios is not None and len(ppfu_ratios) != len(strains):
         raise BadModelInput(
@@ -418,7 +405,7 @@ def _input_prior(nstrains, obs, fixed_input, idx_repeat, ppfu_ratios):
                                                              ), 
                     dims="strain"
                 )[None, :]
-            pass
+            
         else:
                                                                                
             rep = np.asarray(
@@ -794,6 +781,23 @@ def _extend_neut(neut, N, nstrains):
     return neut
 
 
+def _adjust_ct_for_subset(table, strains):
+     """
+     reduce inaccordance with what strains are kept in data
+     """
+     variants = [x for x in table.columns if x != "CT"]
+     frac = table.loc[:, strains].sum(axis=1) / table.loc[:, variants].sum(axis=1)
+     
+     if (frac == 0).any():
+          raise BadModelInput("Some samples have no counts in subset_variants.")
+
+
+     table = table.copy()
+     table.loc[:, "CT"] = table.loc[:, "CT"] - np.log2(frac)
+
+     return table
+
+
 def _preprocess_table(
     table: pd.core.frame.DataFrame,
 ) -> pd.core.frame.DataFrame:
@@ -1130,3 +1134,26 @@ def _sort_table_index(x):
 
 def _join(elems, sep="_"):
     return f"{sep}".join([elem for elem in elems if elem != ""])
+
+def _update_prior_params(prior_params, defaults=None):
+
+  if defaults is None:
+      defaults = default_prior_params
+
+  if prior_params is None:
+      prior_params = {}
+  else:
+      if not all(x in defaults for x in prior_params):
+          up = [x for x in prior_params if x not in defaults]
+          warnings.warn(
+              "prior_params contain some unknown parameters not "
+              f"found in default_prior_params: {up}. Discarding them."
+          )
+
+          prior_params = {
+              key: prior_params.get(key, val) for key,val in defaults.items()
+          }
+          
+  prior_params = dict(defaults, **prior_params)
+
+  return prior_params

@@ -19,7 +19,7 @@ import pytensor
 from .models import default_prior_params, _get_indexers, _factorize_table,\
   _get_coords, _get_counts, _get_obs_for_full_fit, _preprocess_table,\
     get_pt_ests, _input_prior, _extend_neut, _log2_rf_prior,\
-      _concentration_prior, _titers_prior
+      _concentration_prior, _titers_prior, _update_prior_params, _adjust_ct_for_subset
       
 from .utils import _catch_log, BadModelInput
 
@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 _extra_prior_params = {
     "gamma_mu": 0.25,
     "gamma_sd": 0.10,
+    "x_likelihood_sd":0.02,
 }
 
 
@@ -215,21 +216,7 @@ def BB_ct_eiv_model(
         "use_xlatent": use_xlatent
     }
 
-    if prior_params is None:
-        prior_params = {}
-    else:
-        if not all(x in founder_prior_params for x in prior_params):
-            up = [x for x in prior_params if x not in founder_prior_params]
-            warnings.warn(
-                "prior_params contain some unknown parameters not"
-                f"found in founder_prior_params: {up}. Discarding them."
-            )
-
-            prior_params = {
-                key: prior_params.get(key, val) for key,val in founder_prior_params.items()
-            }
-
-    prior_params = dict(founder_prior_params, **prior_params)
+    prior_params = _update_prior_params(prior_params, founder_prior_params)
 
     table = _preprocess_table(table)
 
@@ -237,6 +224,7 @@ def BB_ct_eiv_model(
         strains = [x for x in table.columns if x != "CT"]
     else:
         strains = subset_variants
+        table = _adjust_ct_for_subset(table, strains)
 
     if ppfu_ratios is not None and len(ppfu_ratios) != len(strains):
         raise BadModelInput(
@@ -437,7 +425,7 @@ def BB_ct_eiv_model(
         
         
         if use_xlatent:
-          pm.Normal("dilution", x_latent, x_sd, observed=x)
+          pm.Normal("x_latent", x_latent, x_sd, observed=x)
 
         if not fixed_input:
 
@@ -501,20 +489,7 @@ def BB_mix_model(
 
     model_meta["name"] = "BB_mix"
 
-    if prior_params is None:
-        prior_params = {}
-    else:
-        if not all(x in default_prior_params for x in prior_params):
-            warnings.warn(
-                "prior_params contain some unknown parameters not"
-                "found in default_prior_params. Discarding them."
-            )
-
-            prior_params = {
-                key: prior_params[key] for key in default_prior_params
-            }
-
-    prior_params = dict(default_prior_params, **prior_params)
+    prior_params = _update_prior_params(prior_params, experimental_prior_params)
 
     table = _preprocess_table(table)
 
@@ -522,6 +497,7 @@ def BB_mix_model(
         strains = [x for x in table.columns if x != "CT"]
     else:
         strains = subset_variants
+        table = _adjust_ct_for_subset(table, strains)
 
     if ppfu_ratios is not None and len(ppfu_ratios) != len(strains):
         raise BadModelInput(
