@@ -12,6 +12,7 @@ import itertools as it
 import logging
 import logging.config
 import json
+import functools
 from pathlib import Path
 
 from typing import Union, Optional
@@ -77,6 +78,7 @@ def set_logger_props(
 
 def _catch_log(logger):
     def decorator(func):
+        @functools.wraps(func) 
         def wrapper(*args, **kwargs):
             try:
                 return func(*args, **kwargs)
