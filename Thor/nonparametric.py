@@ -104,7 +104,7 @@ def spearman_karber(
     serum_to_titer_est = {}
 
     for inds in serum_indices:
-
+      
         serum_pfus = pfu_table[pfu_table.SERUM.isin([inds])]
 
         repeats = sorted(list(set(serum_pfus.loc[:, "REPEAT"].values)))
@@ -120,7 +120,12 @@ def spearman_karber(
             serum_pfus, repeats, level_sets, model_meta
         )
 
-        dilution_covariates += model_meta["model_args"]["xshift"]
+        xshift = model_meta["model_args"]["xshift"]
+        if isinstance(xshift, float):
+          dilution_covariates += xshift
+        elif isinstance(xshift, np.ndarray):
+          xshift = np.array([xshift[0]] + list(xshift))
+          dilution_covariates += xshift
 
         p = np.clip(repeat_pfus / noserum_pfus, 0, 1)
         p = np.apply_along_axis(
@@ -256,7 +261,8 @@ def pfus_from_counts(
 
         pfus.loc[label, strains] = (
             input_total_pfus * row_inv_props * scale
-        ).astype(int)
+        )
+
 
     return pfus
 

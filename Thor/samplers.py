@@ -10,7 +10,7 @@ Created on Sun Aug 17 18:35:09 2025
 """
 
 from typing import List, Dict
-import arviz as az
+from xarray import DataTree
 import pymc as pm
 import numpy as np
 import pytensor.tensor as pt
@@ -20,7 +20,7 @@ from .utils import UnacceptableInput
 
 
 def BB_sample_total_neut(model:pm.model.core.Model,
-                         idata:az.data.inference_data.InferenceData,
+                         idata:DataTree,
                          meta:dict) -> None:
   '''
   Used for sampling total_neut and some other related observables concentration.
@@ -49,10 +49,11 @@ def BB_sample_total_neut(model:pm.model.core.Model,
 
   extended_neut = _extend_neut(neut, N, nstrains)
 
-  intcpts = model.conc_intercepts
-
-  pm.Deterministic("conc_slope",
-                   (intcpts[:,1] - intcpts[:,0])/np.abs(prior_params["prop_threshold"]))
+  if (meta["model_args"]["concentration_type"] in ["linear","parametric"]):
+    intcpts = model.conc_intercepts
+  
+    pm.Deterministic("conc_slope",
+                     (intcpts[:,1] - intcpts[:,0])/np.abs(prior_params["prop_threshold"]))
 
 
   pm.Deterministic("total_neut", extended_neut.sum(axis=-1),
@@ -60,7 +61,7 @@ def BB_sample_total_neut(model:pm.model.core.Model,
 
 
 def BB_sample_neut(model:pm.model.core.Model,
-                   idata:az.data.inference_data.InferenceData,
+                   idata:DataTree,
                    sera:List[str], strains:List[str], meta:dict) -> None:
   '''
   Used for sampling neutralization curves and latent neutralized pfus from a
@@ -83,8 +84,9 @@ def BB_sample_neut(model:pm.model.core.Model,
           any(y in x for y in sera + ["NO SERUM"])]
 
   model.add_coord("neut_sample_dim1", dim1)
+  model.add_coord("x_latent_dim", [x for x in dim1 if "NO SERUM" not in x])
   model.add_coord("neut_sample_dim2",  strains)
-
+  
   Icol = [coords["strain"].index(x) for x in strains]
 
   prior_params = meta["model_args"]["prior_params"]
@@ -103,10 +105,21 @@ def BB_sample_neut(model:pm.model.core.Model,
   else:
     input_props = model.input_props
 
+  if all(hasattr(model, f"{sr}_x_noise") for sr in coords["serum"]):
+    sera_x=\
+      [pm.math.cumsum(getattr(model, f"{sr}_x_noise"), axis=0) for sr in 
+       coords["serum"]]
+    x_noise = pt.concatenate([pt.flatten(s.T) for s in sera_x])
+    x = x + x_noise
+    
   log2_rfs = model.log2_rfs
   titers = model.log2_titers
-  slopes_offset = model.slope_offsets
-  slopes = prior_params["s_offset_neut"] + slopes_offset
+  
+  if hasattr(model, "slope_offsets"):
+    slopes_offset = model.slope_offsets
+    slopes = prior_params["s_offset_neut"] + slopes_offset
+  else:
+    slopes = np.ones((serum_idx.size,))
 
   mu = (x[:,None] - titers[serum_idx, :])*slopes[serum_idx,None]
   neut = 1 - pm.math.sigmoid(mu) # sigmoid(x)=1/(1+exp(-x))
@@ -120,7 +133,6 @@ def BB_sample_neut(model:pm.model.core.Model,
   sum_fracs = fracs.sum(axis=-1)
 
   obs_props = obs["assay"]/obs["assay"].sum(axis=-1)[:,None]
-
   neut_inverse = obs_props*sum_fracs[:,None]/(rfs[None,:]*input_props)
 
   #subselect according to sera
@@ -131,7 +143,10 @@ def BB_sample_neut(model:pm.model.core.Model,
                    dims=["neut_sample_dim1","neut_sample_dim2"])
   pm.Deterministic("neut_inverse", neut_inverse[np.ix_(Irow,Icol)],
                    dims=["neut_sample_dim1","neut_sample_dim2"])
-
+  
+  if all(hasattr(model, f"{sr}_x_noise") for sr in coords["serum"]):
+    pm.Deterministic("x_latent", x, dims="x_latent_dim")
+    pm.Deterministic("x_noise", x_noise, dims="x_latent_dim")
 
 def sample_pairwise_differences(model:pm.model.core.Model)->None:
   '''
@@ -214,6 +229,9 @@ def sample_escape(model:pm.model.core.Model,
   is fold drop from the variant given serum_to_ref if not None else
   to the first variant
   '''
+  
+  if not isinstance(rank_sera,list):
+    rank_sera = [rank_sera]
 
   log2_titers = model.log2_titers
   #highest titer has the value 0 as a x-axis covariate
@@ -221,7 +239,7 @@ def sample_escape(model:pm.model.core.Model,
   strains = list(model.coords["strain"])
 
   Iser = [sera.index(s) for s in rank_sera if s in sera]
-  if len(Iser)==0:
+  if len(Iser)==0 and len(rank_sera)>0:
     raise UnacceptableInput(f"None of rank_sera {rank_sera} are in the model sera {sera}.")
 
   if len(Iser)>1:
@@ -231,9 +249,7 @@ def sample_escape(model:pm.model.core.Model,
     pm.Deterministic("serum_mean_escape_rank", rank,
                      dims=["strain"])
 
-  for serum in rank_sera:
-    if serum not in sera:
-      continue
+  for serum in sera:
 
     if serum_to_ref is None:
       i0 = 0

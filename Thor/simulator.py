@@ -165,7 +165,7 @@ def simulate(
 
     dist2 = pm.Normal.dist(
         np.log2(sum_fracs).flatten() + pfu_scales,
-        default_prior_params["ct_sd"],
+        default_prior_params["ct_sd_mean"],
     )
 
     dist3 = pm.Multinomial.dist(n=np.max(nseqs), p=input_props)

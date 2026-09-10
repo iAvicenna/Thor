@@ -10,6 +10,7 @@ Created on Mon Jul  8 16:15:56 2024
 
 import itertools as it
 import logging
+import logging.config
 import json
 from pathlib import Path
 

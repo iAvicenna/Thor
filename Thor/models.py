@@ -20,7 +20,6 @@ from typing import Union, List
 import numpy as np
 import pandas as pd
 import pymc as pm
-import pytensor
 import pytensor.tensor as pt
 from .nonparametric import get_pt_ests
 from .utils import (
@@ -37,27 +36,24 @@ from .utils import (
 
 logger = logging.getLogger(__name__)
 
-_eps = np.finfo(pytensor.config.floatX).eps
-__all__ = ["BB_model", "BB_mix_model"]
+__all__ = ["BB_model"]
 
 # default prior params for the full models with fitness and titers
 default_prior_params = {
-    "ct_sd": 0.1,
-    "pfu_sd": 0.4,
-    "log2_rf_pop_mean_sd": 0.5,
+    "ct_sd_mean": 0.4,
+    "ct_sd_sd": 0.3,
+    "log2_rf_pop_mean_sd": 1,
     "log2_rf_offset_sd": 1,
     "titer_sd": 3,
 }
 
-_default_weights_sigmoid_parameters = {
-    "sd_weight_lam": 1,
-    "scale_weight_sd": 1,
-}
+
 _default_neut_sigmoid_parameters = {
     "s_offset_neut": 0.8,
     "s_mu_neut": 0.5,
-    "s_sd_neut": 0.25,
+    "s_sd_neut": 0.4,
 }
+
 
 # this dictionary which contains all parameters for different types of models
 # so not all the parameters are used in one given model
@@ -66,8 +62,9 @@ _default_concentration_parameters = {
     "conc_intercepts_sd": 4,
     "log_conc_mu": 7,
     "log_conc_sd": 4,
-    "conc_bounds": [0, 18],
+    "conc_bounds": [0, 20],
 }
+
 
 _default_parametric_concentration_parameters = {
     "pc_a_mu": 0.5,
@@ -81,10 +78,10 @@ _default_parametric_concentration_parameters = {
     "pc_int_sd": 0.3,
 }
 
+
 default_prior_params.update(_default_concentration_parameters)
 default_prior_params.update(_default_parametric_concentration_parameters)
 default_prior_params.update(_default_neut_sigmoid_parameters)
-default_prior_params.update(_default_weights_sigmoid_parameters)
 
 
 @_catch_log(logger)
@@ -94,11 +91,13 @@ def BB_model(
     prior_params: dict = None,
     subset_variants: List[str] = None,
     concentration_type: str = "linear",
+    use_xlatent: bool = False,
     sd_scale: float = 1,
     xshift: float = 0,
     fixed_input: bool = False,
     ppfu_ratios: List[float] = None,
     sens: bool = False,
+    constant_ct_sd: bool = True
 ) -> Union[pm.model.core.Model, dict]:
     """
     The main model for fitting titers and replicative fitness values to
@@ -147,7 +146,7 @@ def BB_model(
             range is the same but one has slightly larger reaction volume so
             reaction rate adjustment can be useful.
 
-    sens: if True, some of the priors are changed (such as InverseGamma to Gamma)
+    sens: if True, some of the priors are changed (such as InverseGamma to Gamma or vv)
           Normal to SkewNormal, which is used for prior sensitivity analysis.
 
     verbose: if True, _factorize_table prints a summary of the supplied
@@ -190,19 +189,21 @@ def BB_model(
         "sens": sens,
         "fixed_input": fixed_input,
         "ppfu_ratios": ppfu_ratios,
+        "constant_ct_sd": constant_ct_sd
     }
 
     if prior_params is None:
         prior_params = {}
     else:
         if not all(x in default_prior_params for x in prior_params):
+            up = [x for x in prior_params if x not in default_prior_params]
             warnings.warn(
                 "prior_params contain some unknown parameters not"
-                "found in default_prior_params. Discarding them."
+                f"found in default_prior_params: {up}. Discarding them."
             )
 
             prior_params = {
-                key: prior_params[key] for key in default_prior_params
+                key: prior_params.get(key, val) for key,val in default_prior_params.items()
             }
 
     prior_params = dict(default_prior_params, **prior_params)
@@ -250,6 +251,10 @@ def BB_model(
                 + np.array([5, 6])[None, :]
             }
         )
+        
+        coords["c_side"] = ["ra","la"]
+
+        
     elif concentration_type == "constant":
         initvals.update(
             {
@@ -257,7 +262,7 @@ def BB_model(
                 * prior_params["log_conc_mu"]
             }
         )
-
+        
     model_meta["initvals"] = initvals
 
     prior_params.update(
@@ -284,7 +289,6 @@ def BB_model(
         repeat_idx = pm.Data("repeat_idx", idx["REPEAT"])
         nstrains = len(coords["strain"])
         nsera = len(coords["serum"])
-        nassay_samples = len(coords["assay_sample"])
         nassay_experiments = len(coords["assay_experiment"])
 
         if ppfu_ratios is not None:
@@ -297,7 +301,17 @@ def BB_model(
         log2_rfs = _log2_rf_prior(
             strains, pt_ests, prior_params, sd_scale, sens
         )
-
+        
+        if not constant_ct_sd:
+          if not sens:
+            ct_sd = pm.Gamma("ct_sd", mu=prior_params["ct_sd_mean"], 
+                             sigma=prior_params["ct_sd_sd"])
+          else:
+            ct_sd = pm.InverseGamma("ct_sd", mu=prior_params["ct_sd_mean"], 
+                                    sigma=prior_params["ct_sd_sd"])
+        else:
+          ct_sd = prior_params["ct_sd_mean"]
+        
         # titer and slope of neutralization curve and the associated neutralization
         # sigmoid
         if nsera > 0:
@@ -314,23 +328,6 @@ def BB_model(
         else:
             neut = np.array([])
 
-        if not sens:
-            pfu_scale = pm.Normal(
-                "pfu_scales",
-                0,
-                prior_params["pfu_sd"],
-                size=(nassay_samples,),
-                dims=["assay_sample"],
-            )
-        else:
-            pfu_scale = pm.SkewNormal(
-                "pfu_scales",
-                mu=0,
-                sigma=prior_params["pfu_sd"],
-                alpha=3,
-                size=(nassay_samples,),
-                dims=["assay_sample"],
-            )
 
         rfs = 2**log2_rfs
 
@@ -365,255 +362,18 @@ def BB_model(
             dims=["assay_sample", "strain"],
         )
 
-        # sum fracs has shape 1 + 1 + nserum_samples
-        # first dif_ct is input which is 0 so that one
-        # is not used in the likelihood
+
+        
+          
         pm.Normal(
             "log2_sum_fracs_obs",
-            pt.log2(sum_fracs) + pfu_scale,
-            prior_params["ct_sd"],
+            pt.log2(sum_fracs),
+            ct_sd,
             observed=obs["ct"],
             dims="assay_sample",
         )
-
-        if not fixed_input:
-
-            if ppfu_ratios is not None:
-                input_props = input_props * ppfu_ratios[None, :]
-                input_props = input_props / input_props.sum()
-
-            pm.Multinomial(
-                "input_counts",
-                p=input_props,
-                n=obs["input"].sum(axis=1),
-                observed=obs["input"],
-                size=(N["INPUT"],),
-            )
-
-    return model, model_meta
-
-
-@_catch_log(logger)
-def BB_mix_model(
-    table: pd.core.frame.DataFrame,
-    input_total_pfus: int,
-    prior_params: dict = None,
-    subset_variants: list = None,
-    concentration_type: str = "linear",
-    sd_scale: float = 1,
-    fixed_input: bool = False,
-    ppfu_ratios: list = None,
-    xshift: float = 0,
-) -> pm.model.core.Model:
-    """
-    inputs and outputs are identical to BB_mix model. The main difference
-    is that this is a mixture model which on top of the BB_model adds
-    a geometric noise component to the model to model strains with very low
-    sequence counts which may not be biologically relevant. Eventhough it
-    has somewhat better goodness of fit and cross-validation, it is
-    substantially slower and produces very similar log2 titer and rf estimates.
-    So mostly for diagnostic and experimental purposes for now.
-    """
-
-    if not isinstance(input_total_pfus, int):
-        warnings.warn(
-            f"input_total_pfus must be an integer but is {input_total_pfus}."
-            "converting to integer."
-        )
-
-        input_total_pfus = int(input_total_pfus)
-
-    model_meta = {}
-    model_meta["model_args"] = {
-        "table": table.copy(),
-        "input_total_pfus": input_total_pfus,
-        "prior_params": prior_params,
-        "subset_variants": subset_variants,
-        "concentration_type": concentration_type,
-        "sd_scale": sd_scale,
-        "xshift": xshift,
-        "fixed_input": fixed_input,
-        "ppfu_ratios": ppfu_ratios,
-    }
-
-    model_meta["name"] = "BB_mix"
-
-    if prior_params is None:
-        prior_params = {}
-    else:
-        if not all(x in default_prior_params for x in prior_params):
-            warnings.warn(
-                "prior_params contain some unknown parameters not"
-                "found in default_prior_params. Discarding them."
-            )
-
-            prior_params = {
-                key: prior_params[key] for key in default_prior_params
-            }
-
-    prior_params = dict(default_prior_params, **prior_params)
-
-    table = _preprocess_table(table)
-
-    if subset_variants is None:
-        strains = [x for x in table.columns if x != "CT"]
-    else:
-        strains = subset_variants
-
-    if ppfu_ratios is not None and len(ppfu_ratios) != len(strains):
-        raise BadModelInput(
-            "length of ppfu ratios should be the same as number of strains"
-        )
-
-    table = table.loc[:, ["CT"] + list(strains)]
-    model_meta["processed_table"] = table
-
-    _factorize_table(model_meta, table, fixed_input)
-    idx = _get_indexers(model_meta["factor_table"])
-
-    obs = _get_obs_for_full_fit(table, strains)
-    model_meta["obs"] = obs
-
-    get_pt_ests(model_meta)
-    pt_ests = model_meta["pt_ests"]  # point estimates for some parameters
-    coords = _get_coords(model_meta, idx)
-    N = _get_counts(table)
-
-    initvals = {
-        "log2_rf_offsets": (pt_ests["log2_rf"] - pt_ests["log2_rf_pop_mu"])
-        / (2 * pt_ests["log2_rf_pop_sd"]),
-        "log2_rf_pop_mean": pt_ests["log2_rf_pop_mu"],
-    }
-
-    if concentration_type in ["parametric", "linear"]:
-        initvals.update(
-            {
-                "conc_intercepts": np.zeros(
-                    (len(coords["assay_experiment"]), 2)
-                )
-                + np.array([5, 8])[None, :]
-            }
-        )
-    elif concentration_type != "constant":
-        initvals.update(
-            {
-                "conc_intercepts": np.zeros(
-                    (len(coords["assay_experiment"]), 2)
-                )
-                + np.array([5, 6])[None, :]
-            }
-        )
-
-    initvals.update({"p": 0.5 * np.ones((len(coords["assay_sample"]),))})
-
-    model_meta["initvals"] = initvals
-
-    prior_params.update(
-        {
-            "prop_threshold": np.floor(
-                np.min(np.log10((1 / obs["assay"].sum(axis=-1)).astype(float)))
-            )
-            - 1
-        }
-    )
-
-    model_meta["updated_prior_params"] = prior_params
-
-    with pm.Model(coords=coords) as model:
-
-        # independent variables and other fixed data
-        x = pm.Data("x", model_meta["dilution_covariates"])
-
-        serum_idx = pm.Data("serum_idx", idx["SERUM"])
-        experiment_idx = pm.Data("experiment_idx", idx["EXPERIMENT"])
-        repeat_idx = pm.Data("repeat_idx", idx["REPEAT"])
-
-        nstrains = len(coords["strain"])
-        nsera = len(coords["serum"])
-        nassay_samples = len(coords["assay_sample"])
-        nassay_experiments = len(coords["assay_experiment"])
-
-        if ppfu_ratios is not None:
-            ppfu_ratios = pm.Data("ppfu_ratios", ppfu_ratios)
-
-        input_props = _input_prior(
-            nstrains, obs, fixed_input, repeat_idx, ppfu_ratios
-        )
-
-        log2_rfs = _log2_rf_prior(strains, pt_ests, prior_params, sd_scale)
-
-        # titer and slope of neutralization curve and the associated neutralization
-        # sigmoid
-        neut = _titers_prior(
-            x, prior_params, nsera, nstrains, serum_idx, pt_ests, sd_scale
-        )
-
-        # probability parameter of the geometric distribution
-        # used in mixture
-        p = pm.Uniform(
-            "p", 0.01, 1 - _eps, size=(nassay_samples,), dims="assay_sample"
-        )
-
-        pfu_scale = pm.LogNormal(
-            "pfu_scales",
-            -prior_params["pfu_sd"] ** 2 / 2,
-            prior_params["pfu_sd"],
-            size=(nassay_samples,),
-            dims=["assay_sample"],
-        )
-
-        rfs = 2**log2_rfs
-
-        extended_neut = _extend_neut(neut, N, nstrains)
-
-        log_conc_fun = _concentration_prior(
-            nassay_experiments,
-            experiment_idx,
-            prior_params,
-            concentration_type,
-            extended_neut,
-            input_total_pfus,
-        )
-
-        # transformed priors
-        fracs = extended_neut * rfs * input_props
-        sum_fracs = fracs.sum(axis=-1)
-        fracs = fracs / sum_fracs[:, None]
-
-        log_concs = log_conc_fun(fracs)
-        concs = pm.math.exp(log_concs)
-
-        a = (fracs * concs).T
-
-        dist1 = pm.BetaBinomial.dist(
-            n=np.sum(obs["assay"], axis=-1)[None, :],
-            alpha=a,
-            beta=concs.T - a,
-            size=obs["assay"].T.shape,
-        )
-
-        dist2 = pm.Geometric.dist(p, size=obs["assay"].T.shape)
-
-        weights = _weights_prior(input_props, nassay_samples)
-
-        pm.Mixture(
-            "counts",
-            weights,
-            [dist1, dist2],
-            observed=obs["assay"].T,
-            dims=["strain", "assay_sample"],
-        )
-
-        # sum fracs has shape 1 + 1 + nserum_samples first dif_ct is input which
-        # is 0 so that one is not used in the likelihood
-        pm.Normal(
-            "log2_sum_fracs_obs",
-            pt.log2(sum_fracs * pfu_scale),
-            prior_params["ct_sd"],
-            observed=obs["ct"],
-            dims="assay_sample",
-        )
-
+        
+        
         if not fixed_input:
 
             if ppfu_ratios is not None:
@@ -663,22 +423,6 @@ def _input_prior(nstrains, obs, fixed_input, idx_repeat, ppfu_ratios):
     return input_props
 
 
-def _weights_prior(fracs, nassay_samples):
-
-    A = pm.Normal("A", mu=-6, sigma=4, size=(nassay_samples,))
-    B = pm.InverseGamma("B", mu=1.5, sigma=0.5, size=(nassay_samples,))
-
-    weights = 1 - pm.math.sigmoid(
-        (pm.math.log(fracs) - A[:, None]) * B[:, None]
-    )
-    weights = pm.math.clip(
-        pt.transpose(weights, axes=(1, 0)), -2 * _eps, 1 - 2 * _eps
-    )
-    weights = pt.transpose(pt.stack([1 - weights, weights]), axes=[1, 2, 0])
-
-    return weights
-
-
 def _log2_rf_prior(strains, pt_ests, pp, sd_scale=1, sens=False):
 
     log2_rf_offset = pm.ZeroSumNormal(
@@ -706,7 +450,7 @@ def _log2_rf_prior(strains, pt_ests, pp, sd_scale=1, sens=False):
         log2_rf_pop_mean + pt_ests["log2_rf_pop_sd"] * log2_rf_offset,
         dims="strain",
     )
-
+    
     return log2_rfs
 
 
@@ -717,46 +461,43 @@ def _titers_prior(
     pop_means = np.array(
         [val["pop_mean"] for val in pt_ests["titers"].values()]
     )
-    pop_sds = np.array([val["pop_sd"] for val in pt_ests["titers"].values()])
+    pop_sds = np.array([max(val["pop_sd"],1) for val in pt_ests["titers"].values()])
     mins = np.array([val["bound"][0] for val in pt_ests["titers"].values()])
     maxs = np.array([val["bound"][1] for val in pt_ests["titers"].values()])
 
     if not sens:
         titers = pm.Normal.dist(
             pop_means[:, None],
-            pp["titer_sd"] * sd_scale * pop_sds[:, None],
+            sd_scale * np.clip(pp["titer_sd"] *  pop_sds, 1, maxs-mins)[:,None],
+            size=(nsera, nstrains),
+        )
+
+        slopes_offset = pm.Gamma.dist(
+            mu=pp["s_mu_neut"], sigma=sd_scale * pp["s_sd_neut"], size=nsera
+        )
+    else:
+        titers = pm.Normal.dist(
+            mu=pop_means[:, None]+1,
+            sigma=sd_scale * np.clip(pp["titer_sd"] *  pop_sds, 1, maxs-mins)[:,None],
             size=(nsera, nstrains),
         )
 
         slopes_offset = pm.InverseGamma.dist(
             mu=pp["s_mu_neut"], sigma=sd_scale * pp["s_sd_neut"], size=nsera
         )
-    else:
-        titers = pm.SkewNormal(
-            "log2_titers",
-            mu=pop_means[:, None],
-            sigma=3 * sd_scale * pop_sds[:, None],
-            alpha=3,
-            size=(nsera, nstrains),
-            dims=["serum", "strain"],
-        )
-
-        slopes_offset = pm.Gamma.dist(
-            mu=pp["s_mu_neut"], sigma=sd_scale * pp["s_sd_neut"], size=nsera
-        )
 
     # putting min and max limits in pymc is done via Truncuation
     # similar to the min and max parameters of Stan
-    if not sens:
-        # no point trying to fit titers too much beyond the min and max dilutions
-        # also Truncation not possible in SkewNormal.
-        titers = pm.Truncated(
-            "log2_titers",
-            titers,
-            mins[:, None],
-            maxs[:, None],
-            dims=["serum", "strain"],
-        )
+    # no point trying to fit titers too much beyond the min and max dilutions
+    # also Truncation not possible in SkewNormal so can't add that to sensitivity
+
+    titers = pm.Truncated(
+        "log2_titers",
+        titers,
+        mins[:, None],
+        maxs[:, None],
+        dims=["serum", "strain"],
+    )
 
     # we do not want negative slopes in titer curves and anything beyond 5
     # is unreasonable for 2 fold dilutions (full drop in neutralization in less
@@ -790,12 +531,12 @@ def _concentration_prior(
     if concentration_type == "constant":
 
         if not sens:
-            log_conc = pm.InverseGamma.dist(
-                pp["log_conc_mu"], pp["log_conc_sd"], size=nassay_experiments
+            log_conc = pm.Gamma.dist(
+                mu=pp["log_conc_mu"], sigma=pp["log_conc_sd"], size=nassay_experiments
             )
         else:
-            log_conc = pm.Gamma.dist(
-                pp["log_conc_mu"], pp["log_conc_sd"], size=nassay_experiments
+            log_conc = pm.InverseGamma.dist(
+                mu=pp["log_conc_mu"], sigma=pp["log_conc_sd"], size=nassay_experiments
             )
 
         # ra, la value means beta concentration is in [exp(ra), exp(la)]
@@ -857,6 +598,7 @@ def _concentration_parametric(neut, pfus, experiment_idx, pp):
         "conc_intercepts",
         intcpts,
         *pp["conc_bounds"],
+        dims=["assay_experiment", "c_side"],
         transform=pm.distributions.transforms.ordered,
     )
 
@@ -888,11 +630,13 @@ def _concentration_linear(nassay_experiments, experiment_idx, pp, sens=False):
     # intcps ra,la means beta concentration is in [exp(ra), exp(la)]
     # and at this point if >15 the BetaBinomial has long become a Binomial
     # if <0 too diffuse. We don't want anything too beyond a uniform distribution.
+    
     intcpts = pm.Truncated(
         "conc_intercepts",
         intcpts,
         *pp["conc_bounds"],
         size=(nassay_experiments, 2),
+        dims=["assay_experiment", "c_side"],
         transform=pm.distributions.transforms.ordered,
     )
 
@@ -905,7 +649,7 @@ def _concentration_linear(nassay_experiments, experiment_idx, pp, sens=False):
         * pm.math.clip(pt.math.log10(x), pp["prop_threshold"], np.inf)
         / pp["prop_threshold"]
     )
-
+  
 
 def _get_counts(table):
     return {
@@ -941,9 +685,12 @@ def _get_coords(model_meta, idx):
         raise InternalError(
             'idx["SERUM"] length different from level_sets["SERUM"] length.'
         )
-
+        
+    serum_repeat_set = [x[-1] for x in model_meta["level_sets"]["SERUM_SAMPLE"]]
     coords = {
         "repeat": [x for x in level_sets["REPEAT"] if x != ""],
+        "serum_repeat": [x for x in level_sets["REPEAT"] if x != ""
+                         if x in set(serum_repeat_set)],
         "dilution": [x for x in level_sets["DILUTION"] if x != ""],
         "sample": np.array(list(map(_join, level_sets["SAMPLE"])))[
             idx["SAMPLE"]
@@ -957,6 +704,10 @@ def _get_coords(model_meta, idx):
         ),
         "serum": np.array(sera),
     }
+    
+    for serum in coords["serum"]:
+      coords[f"{serum}_dilution"] = level_sets[f"{serum}_DILUTION"]
+      coords[f"{serum}_repeat"] = level_sets[f"{serum}_REPEAT"]
 
     coords["assay_sample"] = np.array(
         [x for x in coords["sample"] if "INPUT" not in x]
@@ -1182,6 +933,7 @@ def _factorize_table(
     ):
         raise InternalError("SAMPLE in factor table misses some integers.")
 
+
     level_sets["SERUM_EXPERIMENT"] = [
         x
         for x in level_sets["EXPERIMENT"]
@@ -1201,7 +953,18 @@ def _factorize_table(
         for x in level_sets["SAMPLE"]
         if x[0] != "INPUT" and x[0] != "NO SERUM"
     ]
-
+    
+    
+    # this is to account for cases where different sera can have different
+    # dilution ranges or different repeats
+    for serum in level_sets["SERUM"]:
+      level_sets[f"{serum}_DILUTION"] = [x[1] for x in level_sets["SERUM_EXPERIMENT"]
+                                         if x[0]==serum]
+      
+      level_sets[f"{serum}_REPEAT"] = sorted(set([x[-1] for x in level_sets["ASSAY_SAMPLE"]
+                                                  if x[0]==serum]),
+                                             key = level_sets["REPEAT"].index)
+        
     model_meta["end_dilution"] = _get_end_dilution(level_sets["DILUTION"])
 
     dilution_covariates = np.array(
@@ -1300,8 +1063,30 @@ def _get_indexers(factor_table):
             if not isinstance(y, float) or not np.isnan(y)
         ]
     )
+    
+    idx["SERUM_REPEAT"] = np.array(
+        [
+            x
+            for x, y in zip(
+                factor_table.loc[:, "REPEAT"].values.astype(int),
+                factor_table.loc[:, "SERUM"].values,
+            )
+            if not isinstance(y, float) or not np.isnan(y)
+        ]
+    )
+    # to account for INPUT, NO SERUM Repeats or possibility of 
+    # SERUM repeat not starting with A
+    idx["SERUM_REPEAT"] -= min(idx["SERUM_REPEAT"]) 
 
     idx["SAMPLE"] = factor_table.loc[:, "SAMPLE"].values.astype(int)
+
+    idx["DILUTION"] = np.array(
+        [
+            x
+            for x in factor_table.loc[:, "DILUTION"].values
+            if not isinstance(x, float) or not np.isnan(x)
+        ]
+    ).astype(int)
 
     return idx
 
