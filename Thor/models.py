@@ -126,8 +126,7 @@ def BB_model(
                         to a dataset with single repeat per sample however first
                         read the paper to understand what you are doing.
 
-    subset_variants: use the subset of variants given in this input. it adjust the
-                     ct values accordingly.
+    subset_variants: use the subset of variants given in this input. 
 
     sd_scale: increase or decrease the sd of any prior which has sd in its
               parametrization using this input. can be used for prior sensitivity
@@ -291,9 +290,6 @@ def BB_model(
         nsera = len(coords["serum"])
         nassay_experiments = len(coords["assay_experiment"])
 
-        if ppfu_ratios is not None:
-            ppfu_ratios = pm.Data("ppfu_ratios", ppfu_ratios)
-
         input_props = _input_prior(
             nstrains, obs, fixed_input, repeat_idx, ppfu_ratios
         )
@@ -376,8 +372,11 @@ def BB_model(
         
         if not fixed_input:
 
+            # ppfu ratios affect input props through the likelihood when
+            # input props are modelled. That is why it multiplies, where
+            # as for fixed input it would divide.
             if ppfu_ratios is not None:
-                input_props = input_props * ppfu_ratios[None, :]
+                input_props = input_props * np.asarray(ppfu_ratios)[None, :]
                 input_props = input_props / input_props.sum()
 
             pm.Multinomial(
@@ -394,33 +393,48 @@ def BB_model(
 def _input_prior(nstrains, obs, fixed_input, idx_repeat, ppfu_ratios):
 
     if not fixed_input:
+        # if ppfu_ratios are not None, then they do still affect the input
+        # proportions, but through the likelihood, see the branch if not input_fixed
+        # in BBmodel
+      
         input_props = pm.Dirichlet(
             "input_props", a=5 * np.ones((nstrains,)), dims="strain"
         )
 
     else:
         input_props = obs["input_props"]
-
+        
         if input_props.shape[0] == 1:
             if input_props.ndim == 2:
                 input_props = pm.Data(
-                    "input_props", input_props[0, :], dims="strain"
+                    "input_props", _normalize_by_ppfu_ratios(input_props[0, :],
+                                                             ppfu_ratios),
+                    dims="strain"
                 )[None, :]
             else:
                 input_props = pm.Data(
-                    "input_props", input_props, dims="strain"
+                    "input_props", _normalize_by_ppfu_ratios(input_props, 
+                                                             ppfu_ratios
+                                                             ), 
+                    dims="strain"
                 )[None, :]
             pass
         else:
-            input_props = pm.Data("input_props", input_props)[
-                idx_repeat - 1, :
+            input_props = pm.Data("input_props", _normalize_by_ppfu_ratios(input_props, 
+                                                                           ppfu_ratios))[
+                idx_repeat, :
             ]
-
-        if ppfu_ratios is not None:
-            input_props = input_props / ppfu_ratios[None, :]
-            input_props = input_props / input_props.sum()
+        
 
     return input_props
+
+
+def _normalize_by_ppfu_ratios(input_props, ppfu_ratios):
+      if ppfu_ratios is None:
+          return input_props
+      props = np.atleast_2d(input_props) / np.asarray(ppfu_ratios, dtype=float)[None, :]
+      props = props / props.sum(axis=-1, keepdims=True)
+      return props.reshape(np.shape(input_props))
 
 
 def _log2_rf_prior(strains, pt_ests, pp, sd_scale=1, sens=False):
