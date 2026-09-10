@@ -297,7 +297,7 @@ def compute_log_rf_pt_est(model_meta: dict) -> np.ndarray:
 
     if ppfus_ratios is not None:
         input_fracs = input_fracs / np.array(ppfus_ratios)[None, :]
-        input_fracs = input_fracs / input_fracs.sum()
+        input_fracs = input_fracs / input_fracs.sum(axis=-1, keepdims=True)
 
     noserum_fracs = noserum_counts / noserum_counts.sum(axis=-1)[:, None]
 
