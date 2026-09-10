@@ -18,6 +18,7 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 import Thor.models as tm
+import Thor.experimental_models as tme
 
 _CWD = Path(__file__).parent.resolve()
 _DATA = Path(_CWD, "test_inputs")
@@ -79,13 +80,10 @@ class TablePreprocessing(unittest.TestCase):
             )
         )
 
-        # conversion to str for comparison of nans
         self.assertTrue(
-            _check_table_eq(
-                model_meta["factor_table"].astype(str),
-                self.model_meta["factor_table"].astype(str),
-            )
-        )
+              model_meta["factor_table"].equals(self.model_meta["factor_table"])
+          )
+
 
         self.assertDictEqual(
             model_meta["level_sets"], self.model_meta["level_sets"]
@@ -158,7 +156,7 @@ class TestModel(unittest.TestCase):
 
         ppfu_ratios = list(np.ones((self.table.shape[1] - 1)))
 
-        for concentration_type in ["parametric"]:
+        for concentration_type in ["constant", "linear", "parametric"]:
             with self.subTest(f"BB_model {concentration_type}"):
 
                 model, _ = tm.BB_model(
@@ -177,7 +175,7 @@ class TestModel(unittest.TestCase):
 
             with self.subTest(f"BB_mix_model {concentration_type}"):
 
-                model, _ = tm.BB_mix_model(
+                model, _ = tme.BB_mix_model(
                     self.table,
                     10000,
                     concentration_type=concentration_type,
