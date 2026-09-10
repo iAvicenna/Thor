@@ -11,7 +11,7 @@ for the sample for each row where as CT should be the value of the CT measuremen
 values should be empty strings. Different samples can have different REPEAT names. For instance
 if INPUT has a single repeat, its REPEAT value can be an empty string where as if NO SERUM has three repeats
 its repeat values can be A,B. Other relevant input to the model are explained in the doc string. More details
-about how the model was formulated and how it works is given in the paper [PAPER NAME](link). 
+about how the model was formulated and how it works is given in the paper [NGS-RFA/FRA: A High Throughput Experimental and Computational Pipeline for Selective Mutational Scanning in Parallel](https://www.biorxiv.org/content/10.64898/2026.09.01.748481v1). 
 
 Functions inside [samplers.py](https://github.com/iAvicenna/Thor/blob/master/Thor/nonparametric.py) module can be used to carry out posterior predictive sampling for various
 observables of interest such as pairwise differences between titers or neutralization curves.
