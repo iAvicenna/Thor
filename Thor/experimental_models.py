@@ -19,18 +19,13 @@ import pytensor
 from .models import default_prior_params, _get_indexers, _factorize_table,\
   _get_coords, _get_counts, _get_obs_for_full_fit, _preprocess_table,\
     get_pt_ests, _input_prior, _extend_neut, _log2_rf_prior,\
-      _concentration_prior, _titers_prior, _update_prior_params, _adjust_ct_for_subset
+      _concentration_prior, _titers_prior, _update_prior_params, _xprior,\
+        _adjust_ct_for_subset
       
 from .utils import _catch_log, BadModelInput
 
 __all__ = ["BB_ct_eiv_model", "BB_mix_model"]
 logger = logging.getLogger(__name__)
-
-_extra_prior_params = {
-    "gamma_mu": 0.25,
-    "gamma_sd": 0.10,
-    "x_likelihood_sd":0.02,
-}
 
 
 _default_weights_sigmoid_parameters = {
@@ -38,8 +33,7 @@ _default_weights_sigmoid_parameters = {
     "scale_weight_sd": 1,
 }
 
-experimental_prior_params = dict(default_prior_params, **_extra_prior_params)
-experimental_prior_params = dict(experimental_prior_params, **_default_weights_sigmoid_parameters)
+experimental_prior_params = dict(default_prior_params, **_default_weights_sigmoid_parameters)
 
 _founder_prior_params = {
     "ct_slope_excess": 0.20,
@@ -311,8 +305,8 @@ def BB_ct_eiv_model(
         )
         
         if use_xlatent:
-          x_latent, x_sd = _xprior(coords["serum"], prior_params, x,
-                                   model_meta["level_sets"])
+          x_latent = _xprior(coords["serum"], prior_params, x,
+                             model_meta["level_sets"])
         else:
           x_latent = x
         
@@ -423,9 +417,6 @@ def BB_ct_eiv_model(
         )
         
         
-        
-        if use_xlatent:
-          pm.Normal("x_latent", x_latent, x_sd, observed=x)
 
         if not fixed_input:
 
@@ -681,29 +672,4 @@ def _weights_prior(fracs, nassay_samples):
     weights = pt.transpose(pt.stack([1 - weights, weights]), axes=[1, 2, 0])
 
     return weights
-
-def _xprior(sera, prior_params, x, level_sets):
-  '''
-  This goes through so much grief because of the possibility that 
-  different sera might have different dilutions or number of repeats.
-  Otherwise x_noise and x_sd would be an array with dimension
-  ndilution x nsera x nrepeats, cumulatively summed on first axis
-  to reflect noise in serial fold dilution setup.
-  '''
-  
-  # SERUM, REPEAT, DIL
-  sd = prior_params["x_likelihood_sd"]
-  sera_x=\
-    [pm.math.cumsum(pm.Normal(f"{sr}_x_noise", 0, prior_params["x_prior_sd"], 
-                              dims=[f"{sr}_dilution",f"{sr}_repeat"]), axis=0)
-     for sr in sera]
-    
-  x_var = [pm.math.cumsum(sd**2*pt.ones((len(level_sets[f"{sr}_DILUTION"]), 
-                                  len(level_sets[f"{sr}_REPEAT"]))), axis=0)
-          for sr in sera]
-  
-  x_noise = pt.concatenate([pt.flatten(s.T) for s in sera_x])
-  x_sd = pt.sqrt(pt.concatenate([pt.flatten(s.T) for s in x_var]))
-  
-  return x + x_noise, x_sd
 

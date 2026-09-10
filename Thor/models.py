@@ -45,6 +45,7 @@ default_prior_params = {
     "log2_rf_pop_mean_sd": 1,
     "log2_rf_offset_sd": 1,
     "titer_sd": 3,
+    "x_prior_sd":0.05,
 }
 
 
@@ -91,6 +92,7 @@ def BB_model(
     prior_params: dict = None,
     subset_variants: List[str] = None,
     concentration_type: str = "linear",
+    use_xlatent: bool = False,
     sd_scale: float = 1,
     xshift: float = 0,
     fixed_input: bool = False,
@@ -131,6 +133,8 @@ def BB_model(
     sd_scale: increase or decrease the sd of any prior which has sd in its
               parametrization using this input. can be used for prior sensitivity
               analysis.
+              
+    use_xlatent: whether or not to model the dilution noise
 
     fixed_input: if False, input proportions are modelled as a Multinomial,
               otherwise they are fixed as the sequencing proportions.
@@ -186,6 +190,7 @@ def BB_model(
         "sd_scale": sd_scale,
         "xshift": xshift,
         "sens": sens,
+        "use_xlatent": use_xlatent,
         "fixed_input": fixed_input,
         "ppfu_ratios": ppfu_ratios,
         "constant_ct_sd": constant_ct_sd
@@ -285,6 +290,12 @@ def BB_model(
             strains, pt_ests, prior_params, sd_scale, sens
         )
         
+        if use_xlatent:
+          x_latent = _xprior(coords["serum"], prior_params, x,
+                             model_meta["level_sets"])
+        else:
+          x_latent = x
+        
         if not constant_ct_sd:
           if not sens:
             ct_sd = pm.Gamma("ct_sd", mu=prior_params["ct_sd_mean"], 
@@ -299,7 +310,7 @@ def BB_model(
         # sigmoid
         if nsera > 0:
             neut = _titers_prior(
-                x,
+                x_latent,
                 prior_params,
                 nsera,
                 nstrains,
@@ -761,6 +772,27 @@ def _get_obs_for_full_fit(table, strains):
     }
 
     return obs
+
+
+def _xprior(sera, prior_params, x, level_sets):
+  '''
+  This goes through so much grief because of the possibility that 
+  different sera might have different dilutions or number of repeats.
+  Otherwise x_noise  would be an array with dimension
+  ndilution x nsera x nrepeats, cumulatively summed on first axis
+  to reflect noise in serial fold dilution setup.
+  '''
+  
+  # SERUM, REPEAT, DIL
+  sera_x=\
+    [pm.math.cumsum(pm.Normal(f"{sr}_x_noise", 0, prior_params["x_prior_sd"], 
+                              dims=[f"{sr}_dilution",f"{sr}_repeat"]), axis=0)
+     for sr in sera]
+    
+  x_noise = pt.concatenate([pt.flatten(s.T) for s in sera_x])
+  
+  
+  return x + x_noise
 
 
 def _extend_neut(neut, N, nstrains):
