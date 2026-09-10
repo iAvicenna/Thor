@@ -420,11 +420,21 @@ def _input_prior(nstrains, obs, fixed_input, idx_repeat, ppfu_ratios):
                 )[None, :]
             pass
         else:
-            input_props = pm.Data("input_props", _normalize_by_ppfu_ratios(input_props, 
-                                                                           ppfu_ratios))[
-                idx_repeat, :
-            ]
-        
+                                                                               
+            rep = np.asarray(
+                  idx_repeat.get_value()
+                  if hasattr(idx_repeat, "get_value")
+                  else idx_repeat,
+                  dtype=int,
+            )
+            
+            input_props = pm.Data(
+                  "input_props",
+                  _normalize_by_ppfu_ratios(input_props, ppfu_ratios)[rep, :],
+                  dims=["assay_sample", "strain"],
+            )
+
+
 
     return input_props
 

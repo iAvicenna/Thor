@@ -314,9 +314,6 @@ def BB_ct_eiv_model(
         nsera = len(coords["serum"])
         nassay_experiments = len(coords["assay_experiment"])
 
-        if ppfu_ratios is not None:
-            ppfu_ratios = pm.Data("ppfu_ratios", ppfu_ratios)
-
         input_props = _input_prior(
             nstrains, obs, fixed_input, repeat_idx, ppfu_ratios
         )
@@ -445,7 +442,7 @@ def BB_ct_eiv_model(
         if not fixed_input:
 
             if ppfu_ratios is not None:
-                input_props = input_props * ppfu_ratios[None, :]
+                input_props = input_props * np.asarray(ppfu_ratios)[None, :]
                 input_props = input_props / input_props.sum()
 
             pm.Multinomial(
@@ -603,8 +600,6 @@ def BB_mix_model(
         nassay_samples = len(coords["assay_sample"])
         nassay_experiments = len(coords["assay_experiment"])
 
-        if ppfu_ratios is not None:
-            ppfu_ratios = pm.Data("ppfu_ratios", ppfu_ratios)
 
         input_props = _input_prior(
             nstrains, obs, fixed_input, repeat_idx, ppfu_ratios
@@ -681,7 +676,7 @@ def BB_mix_model(
         if not fixed_input:
 
             if ppfu_ratios is not None:
-                input_props = input_props * ppfu_ratios[None, :]
+                input_props = input_props * np.asarray(ppfu_ratios)[None, :]
                 input_props = input_props / input_props.sum()
 
             pm.Multinomial(
